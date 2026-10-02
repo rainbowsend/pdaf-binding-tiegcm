@@ -1,5 +1,7 @@
 # PDAF Binding for TIE-GCM
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23103187.svg)](https://doi.org/10.5281/zenodo.23103187)
+
 This repository contains the coupling layer between the
 [Parallel Data Assimilation Framework (PDAF)](https://github.com/PDAF/PDAF)
 and the [NCAR HAO](https://ncar.ucar.edu/) [Thermosphere Ionosphere Electrodynamics General Circulation Model (TIE-GCM)](https://github.com/NCAR/tiegcm).
@@ -13,6 +15,11 @@ The source code was written by Armin Corbin at the
 Astronomical, Physical and Mathematical Geodesy Group,
 [Institute for Geodesy and Geoinformation](https://www.igg.uni-bonn.de/apmg/de),
 [University of Bonn](https://www.uni-bonn.de/en/home?set_language=en).
+
+## Citation
+
+If you use this software, please cite it via its DOI:
+[10.5281/zenodo.23103187](https://doi.org/10.5281/zenodo.23103187).
 
 ## License
 
