@@ -1,0 +1,20 @@
+This software is part of the NCAR TIE-GCM. Use is governed by the Open
+Source Academic Research License Agreement contained in the file
+tiegcmlicense.txt.
+
+pdaf-binding-tiegcm is a coupling layer between the Parallel Data
+Assimilation Framework (PDAF) and TIE-GCM. It cannot be built or used
+without TIE-GCM, and two licenses therefore apply:
+
+1. The source code in this repository is licensed under the GNU Lesser
+   General Public License, version 3 or (at your option) any later
+   version. See the file LICENSES/LGPL-3.0-or-later.txt.
+
+2. Any use of this software is, in addition, subject to the NCAR TIE-GCM
+   Open Source Academic Research License Agreement. See the file
+   tiegcmlicense.txt. That agreement permits use for research, academic,
+   and non-profit purposes only. In particular, the software, any work
+   containing it, and any data products generated with it may not be
+   sold, licensed, or transferred for a fee, and the software may not be
+   used for operational purposes (forecast, nowcast, or hindcast
+   products).
