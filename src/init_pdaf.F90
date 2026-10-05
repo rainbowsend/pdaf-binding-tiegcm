@@ -54,8 +54,9 @@ SUBROUTINE init_pdaf()
   use mpi_module, only: TIEGCM_WORLD, mytid
 
   ! pdaf
-  use pdaf, only: pdaf_init, pdaf_get_localfilter, pdaf_get_state, pdaf_set_debug_flag, &
-                  PDAFomi_set_searchtype
+  use pdaf, only: pdaf_init, pdaf_get_localfilter, pdaf_get_state, pdaf_set_debug_flag
+! requires PDAF >= 3.1
+!  use pdaf, only: PDAFomi_set_searchtype
 
   ! intern
   use configuration,&
@@ -147,6 +148,8 @@ SUBROUTINE init_pdaf()
 
   CALL PDAF_set_debug_flag(0)
 
+  ! requires PDAF >= 3.1 and including `PDAFomi_set_searchtype` via use statement
+  ! See https://pdaf.awi.de/trac/wiki/OMI_additional_functionality_PDAF3#Optimizingthelocalobservationsearch
 !   CALL PDAFomi_set_searchtype(0, 0)
 
   ! modeltime is initalized in advance.F Too late for next obs
