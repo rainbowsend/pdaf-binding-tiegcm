@@ -274,52 +274,60 @@ module quantity_info_module
 
   !> Integrates the electron density over the vertical column.
   !!
-  !! Both the electron density and the geometric height are located at
-  !! interfaces, thus the trapezoidal rule is applied between them.
-  !!
-  !! ATTENTION the integral only covers the levels of TIE-GCM, which reaches
-  !! from about 90 km up to 500-700 km, depending on ZITOP and solar activity.
-  !! The plasmasphere above the upper boundary is not represented, although it
-  !! contributes a considerable part (typically 10-30 %) of the total electron
-  !! content observed by GNSS. Electrons below the lower boundary are missing
-  !! as well, but their contribution is negligible in comparison. Consequently
-  !! the result is biased low with respect to such observations.
-  function electron_content(ne, zg) result(column)
+  !! Total electron number within vertical column is approximated via trapezoidal rule.
+  !! Contribution from ionosphere above upper boundary of model can optionally be approximated
+  !! assumnig exponential decay
+  function integrate_electron_density(ne, zg, extrapolate) result(column)
 
     implicit none
 
     ! arguments
     real, dimension(:,:,:), intent(in) :: ne ! electron density at interfaces (1/cm3)
     real, dimension(:,:,:), intent(in) :: zg ! geometric height at interfaces (cm)
+    logical, intent(in) :: extrapolate       ! if true extrapolate profile beyond upper boundary
 
     ! result
     real, dimension(size(ne,dim=2),size(ne,dim=3)) :: column ! electron content (1/cm2)
 
     ! local
-    integer :: k
+    integer :: nlev
+    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: N0       ! electron number density at top of TIE-GCM (1/cm3)
+    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: H        ! electron number density scale height (cm)
+    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: ne_extra ! Contribution of ionosphere above upper boundary (1/cm2)
 
-    ! TIE-GCM uses a staggered vertical grid. Both fields integrated here are
-    ! located at the interfaces, which bound the layers:
-    !   ne  electron density (1/cm3), vcoord "interfaces" (see fields.F)
-    !   zg  geometric height (cm)   , at interfaces too   (see addiag.F)
-    !
-    ! This is exactly what the trapezoidal rule needs, since integrating over
-    ! a single layer requires its thickness and the value enclosed by it:
-    !
-    !   interface k+1  ---------  ne(k+1), zg(k+1)   ^
-    !   midpoint       - - - - -                     |  dz = zg(k+1)-zg(k)
-    !   interface k    ---------  ne(k)  , zg(k)     v
-    !
-    ! The thickness follows from the difference of the two bounding
-    ! interfaces. The mean of the two bounding interface values is the value
-    ! at the enclosed midpoint.
 
-    column = 0.
-    do k = 1, size(ne,dim=1)-1
-      column = column + 0.5*(ne(k,:,:)+ne(k+1,:,:)) * (zg(k+1,:,:)-zg(k,:,:))
-    end do
+    nlev = size(ne,dim=1)
+    ! vectorized trapezoidal rule
+    ! integral f(x) from a to b = 0.5 (b-a) (f(a)+f(b))
+    column = 0.5 * sum(  (zg(2:nlev,:,:)-zg(1:nlev-1,:,:)) * (ne(1:nlev-1,:,:)+ne(2:nlev,:,:)), dim=1)
 
-  end function electron_content
+    if(extrapolate) then
+
+      ! assume exponential decay above upper bounary of TIE-GCM
+      !
+      ! N(Z) = N0 exp(-(Z-Z0)/H)
+      !
+      ! where Z0 and N0 are the height and electron number density
+      ! at the upper boundary
+      N0 = ne(nlev,:,:)
+
+      ! Calculate scale height from the two upper most levels
+      ! extrapolation with exponential is only meaningful if electron density
+      ! decays at the top of the model
+      where( ne(nlev-1,:,:) > ne(nlev,:,:) )
+        H = (zg(nlev,:,:)-zg(nlev-1,:,:)) / log(ne(nlev-1,:,:)/N0)
+      elsewhere
+        H = 0
+      end where
+
+      ! integral over N(Z) from Z0 to +inf is H N0
+      ne_extra = H * N0
+
+      column = column + ne_extra
+
+    end if
+
+  end function integrate_electron_density
 
   !> Computes the vertical total electron content from the current-timestep
   !! TIE-GCM electron density and geometric height.
@@ -337,8 +345,12 @@ module quantity_info_module
 
     ! the uppermost TIE-GCM level holds invalid values, thus levX1 is the
     ! highest level that can be integrated
-    this%data(levd0,:,:) = electron_content(ne(levX0:levX1,:,:,itc),&
-                                            zg(levX0:levX1,:,:)) / cm2_per_tecu
+    this%data(levd0,:,:) = integrate_electron_density(ne(levX0:levX1,:,:,itc),&
+                                                      zg(levX0:levX1,:,:),&
+                                                      extrapolate=.true.) / cm2_per_tecu
+
+    ! TODO add contribution from plasmasphere
+
 
   end subroutine
 
@@ -376,8 +388,9 @@ module quantity_info_module
                    he=state_map%field_3d(state_p,"HE"),&
                    zg=zg_state)
 
-    this%data(levd0,lonX0:lonX1,latX0:latX1) = &
-      electron_content(state_map%field_3d(state_p,"NE"), zg_state) / cm2_per_tecu
+    this%data(levd0,lonX0:lonX1,latX0:latX1) = integrate_electron_density(state_map%field_3d(state_p,"NE"),&
+                                                                          zg_state,&
+                                                                          extrapolate=.true.) / cm2_per_tecu
 
   end subroutine
 
