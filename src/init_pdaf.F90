@@ -99,6 +99,7 @@ SUBROUTINE init_pdaf()
             test_get_center_coords
   use time_module,&
       only: seconds_to_tgcm_steps, init_time_module
+  use vtec_module, only: init_vtec
 
   IMPLICIT NONE
 
@@ -184,6 +185,7 @@ SUBROUTINE init_pdaf()
   call init_tiegcm_optimized_interpolator
   call init_cell_id_coordinate_system()
   call set_pdaf_omi_domain_limits()
+  call init_vtec()
 
   if(cfg_filter%open_loop .eqv. .false.) then
 

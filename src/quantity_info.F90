@@ -39,9 +39,6 @@ module quantity_info_module
   integer, parameter :: STEP_CURRENT = 0
   integer, parameter :: STEP_PREVIOUS = 1
 
-  ! 1 tecu = 1e+16 electrons/m2 = 1e+12 electrons/cm2
-  real, parameter :: cm2_per_tecu = 1e+12
-
 
   ! ATTENTION data of quantity_info is either stored in a f4d TIE-GCM field or
   ! in member variable additional_fields (initalized in init_pdaf)
@@ -272,72 +269,16 @@ module quantity_info_module
 !     this%data = op(:,:,:,itc)+o2p(:,:,:,itc)+nop(:,:,:)+nplus(:,:,:)+n2p(:,:,:)
 !   end subroutine
 
-  !> Integrates the electron density over the vertical column.
-  !!
-  !! Total electron number within vertical column is approximated via trapezoidal rule.
-  !! Contribution from ionosphere above upper boundary of model can optionally be approximated
-  !! assumnig exponential decay
-  function integrate_electron_density(ne, zg, extrapolate) result(column)
-
-    implicit none
-
-    ! arguments
-    real, dimension(:,:,:), intent(in) :: ne ! electron density at interfaces (1/cm3)
-    real, dimension(:,:,:), intent(in) :: zg ! geometric height at interfaces (cm)
-    logical, intent(in) :: extrapolate       ! if true extrapolate profile beyond upper boundary
-
-    ! result
-    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: column ! electron content (1/cm2)
-
-    ! local
-    integer :: nlev
-    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: N0       ! electron number density at top of TIE-GCM (1/cm3)
-    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: H        ! electron number density scale height (cm)
-    real, dimension(size(ne,dim=2),size(ne,dim=3)) :: ne_extra ! Contribution of ionosphere above upper boundary (1/cm2)
-
-
-    nlev = size(ne,dim=1)
-    ! vectorized trapezoidal rule
-    ! integral f(x) from a to b = 0.5 (b-a) (f(a)+f(b))
-    column = 0.5 * sum(  (zg(2:nlev,:,:)-zg(1:nlev-1,:,:)) * (ne(1:nlev-1,:,:)+ne(2:nlev,:,:)), dim=1)
-
-    if(extrapolate) then
-
-      ! assume exponential decay above upper bounary of TIE-GCM
-      !
-      ! N(Z) = N0 exp(-(Z-Z0)/H)
-      !
-      ! where Z0 and N0 are the height and electron number density
-      ! at the upper boundary
-      N0 = ne(nlev,:,:)
-
-      ! Calculate scale height from the two upper most levels
-      ! extrapolation with exponential is only meaningful if electron density
-      ! decays at the top of the model
-      where( ne(nlev-1,:,:) > ne(nlev,:,:) )
-        H = (zg(nlev,:,:)-zg(nlev-1,:,:)) / log(ne(nlev-1,:,:)/N0)
-      elsewhere
-        H = 0
-      end where
-
-      ! integral over N(Z) from Z0 to +inf is H N0
-      ne_extra = H * N0
-
-      column = column + ne_extra
-
-    end if
-
-  end function integrate_electron_density
-
   !> Computes the vertical total electron content from the current-timestep
   !! TIE-GCM electron density and geometric height.
   subroutine calc_vtec(this)
 
     ! tiegcm
-    use fields_module, only: levd0,ne,zg,itc
+    use fields_module, only: ne,zg,itc
 
     ! intern
-    use state_module, only: levX0, levX1
+    use state_module, only: levX0, levX1, lonX0, lonX1, latX0, latX1
+    use vtec_module, only: vertical_total_electron_content
 
     implicit none
 
@@ -345,12 +286,9 @@ module quantity_info_module
 
     ! the uppermost TIE-GCM level holds invalid values, thus levX1 is the
     ! highest level that can be integrated
-    this%data(levd0,:,:) = integrate_electron_density(ne(levX0:levX1,:,:,itc),&
-                                                      zg(levX0:levX1,:,:),&
-                                                      extrapolate=.true.) / cm2_per_tecu
-
-    ! TODO add contribution from plasmasphere
-
+    this%data(1,lonX0:lonX1,latX0:latX1) = &
+      vertical_total_electron_content(ne(levX0:levX1,lonX0:lonX1,latX0:latX1,itc),&
+                                     zg(levX0:levX1,lonX0:lonX1,latX0:latX1))
 
   end subroutine
 
@@ -358,12 +296,10 @@ module quantity_info_module
   !! the PDAF state vector and the geometric height derived from it.
   subroutine calc_vtec_from_state(this, state_map, state_p)
 
-    ! tiegcm
-    use fields_module, only: levd0
-
     ! intern
     use aerostatic_diag, only: calc_diag
     use state_module, only : state_vector_mapping, levX0, levX1, lonX0, lonX1, latX0, latX1
+    use vtec_module, only: vertical_total_electron_content
 
     implicit none
 
@@ -388,9 +324,8 @@ module quantity_info_module
                    he=state_map%field_3d(state_p,"HE"),&
                    zg=zg_state)
 
-    this%data(levd0,lonX0:lonX1,latX0:latX1) = integrate_electron_density(state_map%field_3d(state_p,"NE"),&
-                                                                          zg_state,&
-                                                                          extrapolate=.true.) / cm2_per_tecu
+    this%data(1,lonX0:lonX1,latX0:latX1) = vertical_total_electron_content(state_map%field_3d(state_p,"NE"),&
+                                                                          zg_state)
 
   end subroutine
 

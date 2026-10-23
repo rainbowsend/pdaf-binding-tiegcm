@@ -477,6 +477,8 @@ subroutine init_nc_debug(name)
 
     if ( rank_world == 0) then
 
+        write(*,*) "creating debug file ", ncfile
+
         istat = nf_create(ncfile, NF_NETCDF4, ncid)
         if (istat /= NF_NOERR) call handle_ncerr(istat, 'Error creating '//ncfile)
 
@@ -531,37 +533,47 @@ subroutine advance_nc_debug
 
 end subroutine advance_nc_debug
 
-!> Immediately writes one 3D field to the instant-debug NetCDF file for the current ensemble member and time step, defining the variable on first use.
-!!
-!! vcoord is either 'mid' or 'int'.
-subroutine instant_write( var_name, vcoord, f3d)
+
+subroutine instant_write_3d_with_ghost( var_name, vcoord, f3d)
 
     ! tie-gcm
-    use params_module, only: nlevp1
     use fields_module, only:  levd0,levd1, lond0,lond1, latd0,latd1
     use mpi_module, only: mytid
 
     ! intern
-    use state_module, only: idx_nc, idx_intern
+    use state_module, only: idx_intern
+
+    implicit none
+
+    real, dimension(levd0:levd1,lond0:lond1,latd0:latd1), intent(in) :: f3d
+    character(len=*), intent(in) :: var_name
+    character(len=3), intent(in) :: vcoord
+
+    call instant_write_3d(var_name, vcoord, &
+                          f3d(:, &
+                              idx_intern(mytid)%lon0:idx_intern(mytid)%lon1, &
+                              idx_intern(mytid)%lat0:idx_intern(mytid)%lat1))
+
+
+end subroutine
+
+!> Immediately writes one 3D field to the instant-debug NetCDF file for the current ensemble member and time step, defining the variable on first use.
+!!
+!! vcoord is either 'mid' or 'int'.
+subroutine instant_write_3d( var_name, vcoord, f3d)
+
+    ! tie-gcm
+    use params_module, only: nlevp1
+    use fields_module, only:  levd0,levd1
+    use mpi_module, only: mytid
+
+    ! intern
+    use state_module, only: idx_nc, lonX0, lonX1, latX0, latX1
     use mod_parallel_pdaf, only: task_id
 
     implicit none
 
-    !!! important lesson learned here
-    !  explicitly specify bounds! 
-    !
-    !  real, dimension(levd0:levd1, lond0:lond1, latd0:latd1, 2) :: test
-    !  call fun( test(:,:,:,1) )
-    !  explicitly specified bounds are lost when entering function !
-    !
-    ! Thus, we need to define
-    ! 
-    ! real, dimension(levd0:levd1,lond0:lond1,latd0:latd1), intent(in) :: f3d
-    !
-    ! real, dimension(:,:,:), intent(in) :: will have indices staring at 1
-    !
-
-    real, dimension(levd0:levd1,lond0:lond1,latd0:latd1), intent(in) :: f3d
+    real, dimension(levd0:levd1, lonX0:lonX1, latX0:latX1), intent(in) :: f3d
     character(len=*), intent(in) :: var_name
     character(len=3), intent(in) :: vcoord
 
@@ -649,15 +661,124 @@ subroutine instant_write( var_name, vcoord, f3d)
     count_p(4) = idx_nc(mytid)%nlats
     count_p(5) = 1
 
-    istat = nf_put_vara_double(ncid, var_id(var_idx), start_p, count_p,  &
-                f3d(                      :,                             &
-                    idx_intern(mytid)%lon0:idx_intern(mytid)%lon1,       &
-                    idx_intern(mytid)%lat0:idx_intern(mytid)%lat1))
+    istat = nf_put_vara_double(ncid, var_id(var_idx), start_p, count_p, f3d)
     if (istat /= NF_NOERR) call handle_ncerr(istat,'Error putting '//var_name)
 
     istat = nf_close(ncid)
 
     call MPI_Barrier(MPI_COMM_WORLD, ierr)
-end subroutine instant_write
+end subroutine instant_write_3d
+
+subroutine instant_write_2d_with_ghost(var_name, f2d)
+
+    use fields_module, only: lond0,lond1, latd0, latd1
+    use mpi_module, only: mytid
+    use state_module, only: idx_intern
+
+    implicit none
+
+    real, dimension(lond0:lond1,latd0:latd1), intent(in) :: f2d
+    character(len=*), intent(in) :: var_name
+
+    call instant_write_2d(var_name, &
+                          f2d(idx_intern(mytid)%lon0:idx_intern(mytid)%lon1, &
+                              idx_intern(mytid)%lat0:idx_intern(mytid)%lat1))
+
+end subroutine
+
+!> Immediately writes one 2D field to the instant-debug NetCDF file for the current ensemble member and time step, defining the variable on first use.
+!!
+subroutine instant_write_2d( var_name, f2d)
+
+    ! tie-gcm
+    use mpi_module, only: mytid
+
+    ! intern
+    use state_module, only:  lonX0, lonX1, latX0, latX1
+    use state_module, only: idx_nc
+    use mod_parallel_pdaf, only: task_id
+
+    implicit none
+
+    real, dimension(lonX0:lonX1, latX0:latX1), intent(in) :: f2d
+    character(len=*), intent(in) :: var_name
+
+    integer :: var_idx
+
+    integer, dimension(4) :: start_p, count_p
+
+    integer :: dim_id_ensemble, dim_id_time, &
+               dim_id_lon, dim_id_lat
+
+    istat = nf_open_par(ncfile, NF_WRITE, MPI_COMM_WORLD,  MPI_INFO_NULL, ncid)
+    if (istat /= NF_NOERR) call handle_ncerr(istat,'Error opening parallel netcdf '// ncfile)
+
+    istat = nf_inq_unlimdim(ncid, dim_id_time)
+    if (istat /= NF_NOERR) call handle_ncerr(istat,'Error INQUIRE unlimited dim')
+
+    istat = nf_inq_dimid(ncid, "ensemble", dim_id_ensemble)
+    istat = nf_inq_dimid(ncid, "lon", dim_id_lon)
+    istat = nf_inq_dimid(ncid, "lat", dim_id_lat)
+
+    istat = nf_inq_varid(ncid, "mtime", var_id_mtime)
+    if (istat /= NF_NOERR) call handle_ncerr(istat, 'Error INQUIRE mtime')
+
+    istat = nf_inq_varid(ncid, "time", var_id_time)
+    if (istat /= NF_NOERR) call handle_ncerr(istat, 'Error INQUIRE time')
+
+    if (var_list_len < 1) then
+        var_idx = 0
+    else
+        var_idx = findloc( var_list(1:var_list_len), var_name, dim=1)
+    end if
+
+    ! create new varibale if not existing
+    if(  var_idx < 1 ) then
+        var_list_len = var_list_len + 1
+
+        var_idx = var_list_len
+
+        if( var_list_len > maxDebugFields ) then
+            call shutdown( 'to many debug fields. increase maxDebugFields in debugFun.F ' )
+        end if
+
+        write(var_list(var_idx), '(a)' ) trim(var_name)
+        istat = nf_redef(ncid)
+        if (istat /= NF_NOERR) call handle_ncerr(istat,'Error entering define mode')
+
+        istat = NF_DEF_VAR(ncid, var_list(var_idx), NF_DOUBLE, 4, &
+                                (/dim_id_ensemble, dim_id_lon, dim_id_lat, dim_id_time/), &
+                                var_id(var_idx) )
+        if (istat /= NF_NOERR) call handle_ncerr(istat,'Error defining variable '// var_list(var_idx) )
+
+        istat = NF_ENDDEF(ncid)
+        if (istat /= NF_NOERR) call handle_ncerr(istat,'Error leaving define mode')
+    else
+
+        istat = nf_inq_varid (ncid, var_list(var_idx), var_id(var_idx));
+        if (istat /= NF_NOERR) call handle_ncerr(istat, 'Error inq '//var_list(var_idx))
+    end if
+
+    ! write data
+    istat = nf_var_par_access(ncid, var_id(var_idx), NF_COLLECTIVE);
+    if (istat /= NF_NOERR) call handle_ncerr(istat, 'Error setting par_access'//var_list(var_idx))
+
+    start_p(1) = task_id ! ensemble
+    start_p(2) = idx_nc(mytid)%lon0
+    start_p(3) = idx_nc(mytid)%lat0
+    start_p(4) = ulimlen
+
+    count_p(1) = 1
+    count_p(2) = idx_nc(mytid)%nlons
+    count_p(3) = idx_nc(mytid)%nlats
+    count_p(4) = 1
+
+    istat = nf_put_vara_double(ncid, var_id(var_idx), start_p, count_p, f2d)
+    if (istat /= NF_NOERR) call handle_ncerr(istat,'Error putting '//var_name)
+
+    istat = nf_close(ncid)
+
+    call MPI_Barrier(MPI_COMM_WORLD, ierr)
+end subroutine instant_write_2d
 
 end module nc_debug
