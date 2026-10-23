@@ -82,13 +82,15 @@ subroutine init_vtec
   select case (density_model)
     case(PLASMASPHERE_DENSITY_OZHOGIN)
       pZ0 = 2000E+5
+      dz = (4*re-pZ0)/n_vert
     case(PLASMASPHERE_DENSITY_HARTLEY)
       pZ0 = 1000E+5
+      dz = (3*re-pZ0)/n_vert
     case default
     call shutdown('unknown plasmaspheric model')
   end select
 
-  dz = 6*re/n_vert
+
   z(1)=pZ0
   do i=2, n_vert
     z(i) = z(i-1) + dz
@@ -295,7 +297,11 @@ subroutine calc_vpec()
       call shutdown('unknown plasmaspheric model')
   end select
 
-  vpec = dz*sum(ne,dim=3)/cm2_per_tecu
+  ! rectangle rule
+  !vpec = dz*sum(ne,dim=3)/cm2_per_tecu
+  !
+  ! integral f(x) from a to b = 0.5 (b-a) (f(a)+f(b))
+  vpec = 0.5 * dz * sum(  (ne(:,:,1:n_vert-1)+ne(:,:,2:n_vert)), dim=3)/cm2_per_tecu
 
 !   call instant_write_2d("vpec", vpec)
 
