@@ -447,13 +447,9 @@ module trajectory_data_module
     use cdf90
     use ESMF
 
-    ! tie-gcm
-    use nchist_module, only: handle_ncerr
-
     ! intern
-    use coordinates_module, only: wgs84
-    use netcdf_functionality, only: read_time_variable
-    use time_module, only: convert_GPS_to_UTC, convert_to_seconds_since_ref
+    use coordinates_module, only: grs80
+    use time_module, only: convert_to_seconds_since_ref
 
     implicit none
 
@@ -474,6 +470,7 @@ module trajectory_data_module
 
     real, allocatable, dimension(:) :: values
     real, allocatable, dimension(:,:) :: position
+    integer(1), allocatable, dimension(:) :: flag
 
     integer, dimension(:), allocatable :: counts
     integer, dimension(:), allocatable :: lbounds
@@ -507,6 +504,7 @@ module trajectory_data_module
       if (istat .lt. CDF_OK) stop 'open failed'
 
       call cdf90_get_zvars_maxwrittenrecnum( id(fid), counts(fid), istat)
+      if (istat .lt. CDF_OK) stop 'reading number of records failed'
     end do
 
     ! determine position of each file in array containing data from all files
@@ -539,8 +537,10 @@ module trajectory_data_module
                         h=int(hour,kind=ESMF_KIND_I4),&
                         m=int(minute,kind=ESMF_KIND_I4),&
                         s=int(second,kind=ESMF_KIND_I4),&
+                        ms=int(msec,kind=ESMF_KIND_I4),&
                         calkindflag=ESMF_CALKIND_GREGORIAN,&
                         rc=rc)
+      if (rc /= ESMF_SUCCESS) stop 'converting time failed'
     end do
 
     deallocate(float_time)
@@ -553,6 +553,7 @@ module trajectory_data_module
     ! read trajectory
     allocate(values(n_all))
     allocate(position(n_all,3))
+    allocate(flag(n_all))
 
     do fid = 1, nfiles
 
@@ -576,14 +577,34 @@ module trajectory_data_module
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),3), istat)
       if (istat .lt. CDF_OK) stop 'reading alt failed'
 
+      var_id = cdf90_get_var_num(id(fid), 'validity_flag')
+      if (var_id .lt. CDF_OK) stop 'variable validity_flag not found'
+      call cdf90_get_zvar_allrecords_varid_int1(id(fid), var_id, flag(lbounds(fid):ubounds(fid)), istat)
+      if (istat .lt. CDF_OK) stop 'reading validity_flag failed'
+
+      call cdf90_close(id(fid), istat)
+      if (istat .lt. CDF_OK) stop 'close failed'
+
     end do
 
     deallocate(time_all)
 
+    ! data gaps: anomalous data (flag 1) or fill values (FILLVAL 0.999E33)
+    allocate(this%data_gap(n_all))
+    this%data_gap = (flag /= 0 .or. &
+                     values > 1e32 .or. &
+                     any(position > 1e32, dim=2))
+    deallocate(flag)
+
+    ! duplicate or non-increasing time stamps (e.g. overlapping files)
+    do i = 2, n_all
+      if (this%modeltime(i) <= this%modeltime(i-1)) this%data_gap(i) = .true.
+    end do
+
     ! convert to cartesian coordinates to avoid jumps in longitude interpolation
     do i=1,n_all
       if(this%data_gap(i).eqv..false.)then
-        position(i,:) = wgs84%ellipsoidalGeodetic2cartesian(position(i,:))
+        position(i,:) = grs80%ellipsoidalGeodetic2cartesian(position(i,:))
       end if
     end do
 
@@ -604,8 +625,11 @@ module trajectory_data_module
     deallocate(values)
     deallocate(position)
 
+    ! extend gap to neigbour on left and right twice
+    ! so bspline of degree is always in valid range
+    call binary_dilation(this%data_gap,2)
 
-    deallocate(counts,lbounds,ubounds)
+    deallocate(id,counts,lbounds,ubounds)
 
   end subroutine
 

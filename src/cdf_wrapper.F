@@ -1,3 +1,10 @@
+! The CDF Fortran interface is not provided as a module but only via cdf.inc,
+! which is imported line-by-line using include. As `cdf.inc` is formatted in
+! fixed-format. This module wraps the required CDF routines so that
+! free-form code can use them via 'use cdf90'.
+!
+! This file must be compiled with -fsecond-underscore, as libcdf exports
+! its Fortran routines with two trailing underscores.
       module cdf90
 
       implicit none
@@ -29,7 +36,7 @@
       end subroutine
 
       subroutine cdf90_get_zvar_allrecords_varid(id, var_num, values,
-     &                                           status)
+     |                                           status)
         integer(4), intent(in) :: id
         integer(4), intent(in) :: var_num
         real(8), dimension(*), intent(out) :: values
@@ -37,13 +44,22 @@
         call CDF_get_zvar_allrecords_varid(id, var_num, values, status)
       end subroutine
 
+      subroutine cdf90_get_zvar_allrecords_varid_int1(id, var_num,
+     |                                                values, status)
+        integer(4), intent(in) :: id
+        integer(4), intent(in) :: var_num
+        integer(1), dimension(*), intent(out) :: values
+        integer(4), intent(out) :: status
+        call CDF_get_zvar_allrecords_varid(id, var_num, values, status)
+      end subroutine
+
       subroutine cdf90_epoch_breakdown(epoch, year, month, day, hour,
-     &                                 minute, second, msec)
+     |                                 minute, second, msec)
         real(8), intent(in) :: epoch
         integer(4), intent(out) :: year, month, day, hour
         integer(4), intent(out) :: minute, second, msec
         call EPOCH_breakdown(epoch, year, month, day, hour,
-     &                       minute, second, msec)
+     |                       minute, second, msec)
       end subroutine
 
       function cdf90_get_var_num(id, name) result(var_num)
