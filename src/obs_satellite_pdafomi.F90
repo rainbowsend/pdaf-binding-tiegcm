@@ -136,6 +136,8 @@ MODULE obs_satellite_pdafomi
       case('toleos','toleos_reduced','toleos_short','groops')
           call this%data%read_txt(config%file,config%file_format)
           this%observed_quantity = 'DEN'
+      case('toleos_cdf')
+          call this%data%read_toleos_cdf(config%file)
       case default
         call shutdown(config%file_format//' is an invalid file format for satellite observation')
     end select

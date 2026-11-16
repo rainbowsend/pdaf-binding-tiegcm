@@ -46,6 +46,7 @@ module trajectory_data_module
     procedure, pass(this) :: deallocate => trajectory_data_deallocate
     procedure, pass(this) :: read_denswind => trajectory_data_read_denswind
     procedure, pass(this) :: read_txt => trajectory_data_read_txt
+    procedure, pass(this) :: read_toleos_cdf => trajectory_data_read_toleos_cdf
     procedure, pass(this) :: get_at_epoch => trajectory_data_get_at_epoch
     procedure, pass(this) :: valid_at_epoch => trajectory_data_valid_at_epoch
   end type
@@ -436,6 +437,176 @@ module trajectory_data_module
       write(*,*) trim(file), 'does not exist'
       n_valid_lines = 0
     end if
+  end subroutine
+
+  !> Reads one or more DENSWIND NetCDF files, converts positions to cartesian
+  !! coordinates, and builds spline interpolators plus a data-gap mask.
+  subroutine trajectory_data_read_toleos_cdf(this, file)
+
+    ! extern
+    use cdf90
+    use ESMF
+
+    ! tie-gcm
+    use nchist_module, only: handle_ncerr
+
+    ! intern
+    use coordinates_module, only: wgs84
+    use netcdf_functionality, only: read_time_variable
+    use time_module, only: convert_GPS_to_UTC, convert_to_seconds_since_ref
+
+    implicit none
+
+    ! arguments
+    class(trajectory_data) :: this
+    character(len=*), intent(in) :: file
+
+    ! local
+    integer :: istat
+    integer, dimension(:), allocatable :: id
+
+    integer :: var_id
+
+    type(ESMF_TIME), allocatable, dimension(:) :: time_all
+    real, allocatable, dimension(:) :: float_time
+
+!     character(len=64) :: timestr
+
+    real, allocatable, dimension(:) :: values
+    real, allocatable, dimension(:,:) :: position
+
+    integer, dimension(:), allocatable :: counts
+    integer, dimension(:), allocatable :: lbounds
+    integer, dimension(:), allocatable :: ubounds
+    integer :: n_all
+
+    integer :: i
+    integer :: rc
+
+    integer :: nfiles
+    integer :: fid
+
+    character(len=256), dimension(:), allocatable :: matches
+
+    integer :: year, month, day, hour, minute, second, msec
+
+    write(*,*) 'read along track data from ', file
+
+    ! ATTENTION we assume that alphabetic and chronological order are the same
+    call get_matching_files(file, matches)
+
+    nfiles = size(matches,dim=1)
+
+    allocate(id(nfiles))
+    allocate(counts(nfiles))
+    allocate(lbounds(nfiles))
+    allocate(ubounds(nfiles))
+
+    do fid = 1, nfiles
+      call cdf90_open(trim(matches(fid)), id(fid), istat)
+      if (istat .lt. CDF_OK) stop 'open failed'
+
+      call cdf90_get_zvars_maxwrittenrecnum( id(fid), counts(fid), istat)
+    end do
+
+    ! determine position of each file in array containing data from all files
+    n_all = sum(counts)
+    lbounds(1) = 1
+    do fid = 2, nfiles
+      lbounds(fid) = lbounds(fid-1) + counts(fid-1)
+    end do
+    ubounds = lbounds + counts -1
+
+    ! read time
+    allocate(float_time(n_all))
+
+    do fid = 1, nfiles
+      var_id = cdf90_get_var_num(id(fid), 'time')
+      if (var_id .lt. CDF_OK) stop 'variable time not found'
+      call cdf90_get_zvar_allrecords_varid(id(fid), var_id, float_time(lbounds(fid):ubounds(fid)), istat)
+      if (istat .lt. CDF_OK) stop 'reading time failed'
+    end do
+
+    allocate(time_all(n_all))
+    do i = 1, n_all
+      call cdf90_epoch_breakdown(float_time(i), year, month, day, hour, &
+                                 minute, second, msec)
+
+      call ESMF_TimeSet(time_all(i),&
+                        yy=int(year,kind=ESMF_KIND_I4),&
+                        mm=int(month,kind=ESMF_KIND_I4),&
+                        dd=int(day,kind=ESMF_KIND_I4),&
+                        h=int(hour,kind=ESMF_KIND_I4),&
+                        m=int(minute,kind=ESMF_KIND_I4),&
+                        s=int(second,kind=ESMF_KIND_I4),&
+                        calkindflag=ESMF_CALKIND_GREGORIAN,&
+                        rc=rc)
+    end do
+
+    deallocate(float_time)
+
+    ! is already UTC
+    ! call convert_GPS_to_UTC(time_all)
+    allocate(this%modeltime(n_all))
+    call convert_to_seconds_since_ref(time_all,this%modeltime)
+
+    ! read trajectory
+    allocate(values(n_all))
+    allocate(position(n_all,3))
+
+    do fid = 1, nfiles
+
+      var_id = cdf90_get_var_num(id(fid), 'density')
+      if (var_id .lt. CDF_OK) stop 'variable density not found'
+      call cdf90_get_zvar_allrecords_varid(id(fid), var_id, values(lbounds(fid):ubounds(fid)), istat)
+      if (istat .lt. CDF_OK) stop 'reading density failed'
+
+      var_id = cdf90_get_var_num(id(fid), 'longitude')
+      if (var_id .lt. CDF_OK) stop 'variable lon not found'
+      call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),1), istat)
+      if (istat .lt. CDF_OK) stop 'reading lon failed'
+
+      var_id = cdf90_get_var_num(id(fid), 'latitude')
+      if (var_id .lt. CDF_OK) stop 'variable lat not found'
+      call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),2), istat)
+      if (istat .lt. CDF_OK) stop 'reading lat failed'
+
+      var_id = cdf90_get_var_num(id(fid), 'altitude')
+      if (var_id .lt. CDF_OK) stop 'variable alt not found'
+      call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),3), istat)
+      if (istat .lt. CDF_OK) stop 'reading alt failed'
+
+    end do
+
+    deallocate(time_all)
+
+    ! convert to cartesian coordinates to avoid jumps in longitude interpolation
+    do i=1,n_all
+      if(this%data_gap(i).eqv..false.)then
+        position(i,:) = wgs84%ellipsoidalGeodetic2cartesian(position(i,:))
+      end if
+    end do
+
+    ! initalize spline interpolation
+    call this%x_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                          pack(position(:,1),this%data_gap.eqv..false.),&
+                          degree=3)
+    call this%y_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                          pack(position(:,2),this%data_gap.eqv..false.),&
+                          degree=3)
+    call this%z_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                          pack(position(:,3),this%data_gap.eqv..false.),&
+                          degree=3)
+    call this%values%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                          pack(values,this%data_gap.eqv..false.),&
+                          degree=3)
+
+    deallocate(values)
+    deallocate(position)
+
+
+    deallocate(counts,lbounds,ubounds)
+
   end subroutine
 
   !> Reads one or more DENSWIND NetCDF files, converts positions to cartesian
