@@ -1,3 +1,4 @@
+#ifdef USE_CDF
 ! The CDF Fortran interface is not provided as a module but only via cdf.inc,
 ! which is imported line-by-line using include. As `cdf.inc` is formatted in
 ! fixed-format. This module wraps the required CDF routines so that
@@ -72,3 +73,4 @@
       end function
 
       end module
+#endif

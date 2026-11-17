@@ -76,21 +76,18 @@ module trajectory_data_module
   subroutine trajectory_data_init(this, n, modeltime, position, values, data_gap)
 
      ! intern
-     use configuration, only: path_len, cfg_log
+     use configuration, only: cfg_log
      use time_module, only: modeltime_to_string
-
-     ! extern
-     use ESMF
 
      implicit none
 
      ! arguments
      class(trajectory_data) :: this
-     integer :: n
+     integer, intent(in) :: n
      real, dimension(n), intent(in) :: modeltime ! seconds since model reference epoch
-     real, dimension(n,3) :: position            ! cartesian coordinates x,y,z in meters
-     real, dimension(n) :: values
-     logical, dimension(n) :: data_gap           ! if true respective entry in values is not valid
+     real, dimension(n,3), intent(in) :: position            ! cartesian coordinates x,y,z in meters
+     real, dimension(n), intent(in) :: values
+     logical, dimension(n), intent(in) :: data_gap           ! if true respective entry in values is not valid
 
      ! local
      integer, parameter :: spline_degree = 3
@@ -157,8 +154,6 @@ module trajectory_data_module
   integer :: n_total_lines
   integer :: n_valid_lines
   integer :: n_obs
-
-  character(len=27) :: time_string
 
   real, allocatable, dimension(:) :: modeltime
   logical, allocatable, dimension(:) :: data_gap
@@ -484,12 +479,17 @@ module trajectory_data_module
     end if
   end subroutine
 
-  !> Reads one or more DENSWIND NetCDF files, converts positions to cartesian
-  !! coordinates, and builds spline interpolators plus a data-gap mask.
+  !> Reads one or more toleos CDF files,
+  ! (e.g., from https://swarmhandbook.earth.esa.int/catalogue/ch_dns_acc_2_)
+  ! converts positions to cartesian coordinates,
+  ! and builds spline interpolators plus a data-gap mask.
   subroutine trajectory_data_read_toleos_cdf(this, file)
 
+
     ! extern
+#ifdef USE_CDF
     use cdf90
+#endif
     use ESMF
 
     ! intern
@@ -534,6 +534,7 @@ module trajectory_data_module
 
     write(*,*) 'read along track data from ', file
 
+#ifdef USE_CDF
     ! ATTENTION we assume that alphabetic and chronological order are the same
     call get_matching_files(file, matches)
 
@@ -666,7 +667,9 @@ module trajectory_data_module
     deallocate(values)
     deallocate(position)
     deallocate(id,counts,lbounds,ubounds)
-
+#else
+    call shutdown('TIE-GCM-PDAF was not compiled with support for CDF files. Compile it with USE_CDF flag and link the cdf library')
+#endif
   end subroutine
 
   !> Reads one or more DENSWIND NetCDF files, converts positions to cartesian

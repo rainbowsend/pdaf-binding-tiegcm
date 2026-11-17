@@ -408,7 +408,7 @@ module time_module
     implicit none
 
     ! arguments
-    real, intent(in) :: modeltime ! seconds sind model reference epoch
+    real, intent(in) :: modeltime ! seconds since model reference epoch
 
     ! local
     type(ESMF_TimeInterval) :: timeinterval
