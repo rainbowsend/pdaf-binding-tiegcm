@@ -43,6 +43,7 @@ module trajectory_data_module
     real :: current_value
     real, private :: time_previous_call = -huge(0.0)
     contains
+    procedure, pass(this) :: init => trajectory_data_init
     procedure, pass(this) :: deallocate => trajectory_data_deallocate
     procedure, pass(this) :: read_denswind => trajectory_data_read_denswind
     procedure, pass(this) :: read_txt => trajectory_data_read_txt
@@ -68,6 +69,63 @@ module trajectory_data_module
     call this%x_trf%deallocate
     call this%y_trf%deallocate
     call this%z_trf%deallocate
+
+  end subroutine
+
+  !> Constructor for instance of trajectory
+  subroutine trajectory_data_init(this, n, modeltime, position, values, data_gap)
+
+     ! intern
+     use configuration, only: path_len, cfg_log
+     use time_module, only: modeltime_to_string
+
+     ! extern
+     use ESMF
+
+     implicit none
+
+     ! arguments
+     class(trajectory_data) :: this
+     integer :: n
+     real, dimension(n), intent(in) :: modeltime ! seconds since model reference epoch
+     real, dimension(n,3) :: position            ! cartesian coordinates x,y,z in meters
+     real, dimension(n) :: values
+     logical, dimension(n) :: data_gap           ! if true respective entry in values is not valid
+
+     ! local
+     integer, parameter :: spline_degree = 3
+     integer, parameter :: gap_extension = 2
+
+     integer :: i
+
+     allocate(this%modeltime, source= modeltime)
+     allocate(this%data_gap, source= data_gap)
+
+      ! initalize spline interpolation
+      call this%x_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                            pack(position(:,1),this%data_gap.eqv..false.),&
+                            degree=spline_degree)
+      call this%y_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                            pack(position(:,2),this%data_gap.eqv..false.),&
+                            degree=spline_degree)
+      call this%z_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                            pack(position(:,3),this%data_gap.eqv..false.),&
+                            degree=spline_degree)
+      call this%values%init( pack(this%modeltime,this%data_gap.eqv..false.),&
+                            pack(values,this%data_gap.eqv..false.),&
+                            degree=spline_degree)
+
+      ! extend gap to neigbour on left and right twice
+      ! so bspline of degree is always in valid range
+      call binary_dilation(this%data_gap, gap_extension)
+
+      if(cfg_log%verbose_level>0) then
+        write(*,*) "print the first 10 parsed and processed observations:"
+        write(*,'(a21, a4, 4a15)') "time","gap","x (m)","y (m)","z (m)","den (kg m-3)"
+        do i = 1, min(10, n)
+          write(*,'(a21, l3, 3f15.1, e15.8)')  modeltime_to_string(this%modeltime(i)), this%data_gap(i), position(i,:), values(i)
+        end do
+      end if
 
   end subroutine
 
@@ -101,6 +159,9 @@ module trajectory_data_module
   integer :: n_obs
 
   character(len=27) :: time_string
+
+  real, allocatable, dimension(:) :: modeltime
+  logical, allocatable, dimension(:) :: data_gap
 
 
   type(ESMF_Time), dimension(:), allocatable :: time
@@ -149,52 +210,36 @@ module trajectory_data_module
 
   call convert_GPS_to_UTC(time(1:n_obs), time_system(1:n_obs)==TIME_SYSTEM_GPS)
 
-  allocate(this%modeltime(n_obs))
-  call convert_to_seconds_since_ref(time(1:n_obs),this%modeltime)
+  allocate(modeltime(n_obs))
+  call convert_to_seconds_since_ref(time(1:n_obs),modeltime)
 
   ! convert to cartesian coordinates to avoid jumps in longitude interpolation
   do i=1,n_obs
       data(i,1:3) = wgs84%ellipsoidalGeodetic2cartesian(data(i,1:3))
   end do
 
-  ! initalize spline interpolation
-  call this%x_trf%init(this%modeltime,data(1:n_obs,1), degree=3)
-  call this%y_trf%init(this%modeltime,data(1:n_obs,2), degree=3)
-  call this%z_trf%init(this%modeltime,data(1:n_obs,3), degree=3)
-  call this%values%init(this%modeltime,data(1:n_obs,4), degree=3)
-
   ! check for data gaps in time series
-  allocate(this%data_gap(n_obs))
-  this%data_gap = .false.
+  allocate(data_gap(n_obs))
+  data_gap = .false.
 
   ! mark observations adjacent to data gaps with flag
   allocate(time_diff(2,n_obs))
   time_diff = 0.0
 
-  time_diff(1,1:n_obs-1)=this%modeltime(2:n_obs)-this%modeltime(1:n_obs-1)
+  time_diff(1,1:n_obs-1)=modeltime(2:n_obs)-modeltime(1:n_obs-1)
   time_diff(2,2:n_obs)=time_diff(1,1:n_obs-1)
 
   ! consider everything longer than 30s as data gap
-  where( maxval(time_diff,dim=1)>30.0) this%data_gap = .true.
+  where( maxval(time_diff,dim=1)>30.0) data_gap = .true.
 
-  ! extend gap to neigbour on left and right twice
-  ! so bspline of degree is always in valid range
-  call binary_dilation(this%data_gap,2)
+  call this%init(n_obs, modeltime, data(1:n_obs,1:3), data(1:n_obs,4), data_gap)
 
   deallocate(time_diff)
-
-  if(cfg_log%verbose_level>0) then
-    write(*,*) "print the first 10 parsed and processed observations:"
-    write(*,'(a21, a4, 4a15)') "time","gap","x (m)","y (m)","z (m)","den (kg m-3)"
-    do i = 1, min(10, n_obs)
-      call ESMF_TimeGet(time(i), timeString=time_string)
-      write(*,'(a21, l3, 3f15.1, e15.8)')  time_string, this%data_gap(i), data(i,:)
-    end do
-  end if
-
   deallocate(time)
   deallocate(time_system)
   deallocate(data)
+  deallocate(modeltime)
+  deallocate(data_gap)
 
   end subroutine
 
@@ -466,11 +511,11 @@ module trajectory_data_module
     type(ESMF_TIME), allocatable, dimension(:) :: time_all
     real, allocatable, dimension(:) :: float_time
 
-!     character(len=64) :: timestr
-
     real, allocatable, dimension(:) :: values
     real, allocatable, dimension(:,:) :: position
     integer(1), allocatable, dimension(:) :: flag
+    real, allocatable, dimension(:) :: modeltime
+    logical, allocatable, dimension(:) :: data_gap
 
     integer, dimension(:), allocatable :: counts
     integer, dimension(:), allocatable :: lbounds
@@ -501,10 +546,10 @@ module trajectory_data_module
 
     do fid = 1, nfiles
       call cdf90_open(trim(matches(fid)), id(fid), istat)
-      if (istat .lt. CDF_OK) stop 'open failed'
+      if (istat .lt. CDF_OK) call shutdown('open failed')
 
       call cdf90_get_zvars_maxwrittenrecnum( id(fid), counts(fid), istat)
-      if (istat .lt. CDF_OK) stop 'reading number of records failed'
+      if (istat .lt. CDF_OK) call shutdown('reading number of records failed')
     end do
 
     ! determine position of each file in array containing data from all files
@@ -520,9 +565,9 @@ module trajectory_data_module
 
     do fid = 1, nfiles
       var_id = cdf90_get_var_num(id(fid), 'time')
-      if (var_id .lt. CDF_OK) stop 'variable time not found'
+      if (var_id .lt. CDF_OK) call shutdown('variable time not found')
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, float_time(lbounds(fid):ubounds(fid)), istat)
-      if (istat .lt. CDF_OK) stop 'reading time failed'
+      if (istat .lt. CDF_OK) call shutdown('reading time failed')
     end do
 
     allocate(time_all(n_all))
@@ -540,15 +585,15 @@ module trajectory_data_module
                         ms=int(msec,kind=ESMF_KIND_I4),&
                         calkindflag=ESMF_CALKIND_GREGORIAN,&
                         rc=rc)
-      if (rc /= ESMF_SUCCESS) stop 'converting time failed'
+      if (rc /= ESMF_SUCCESS) call shutdown( 'converting time failed')
     end do
 
     deallocate(float_time)
 
     ! is already UTC
     ! call convert_GPS_to_UTC(time_all)
-    allocate(this%modeltime(n_all))
-    call convert_to_seconds_since_ref(time_all,this%modeltime)
+    allocate(modeltime(n_all))
+    call convert_to_seconds_since_ref(time_all,modeltime)
 
     ! read trajectory
     allocate(values(n_all))
@@ -558,77 +603,68 @@ module trajectory_data_module
     do fid = 1, nfiles
 
       var_id = cdf90_get_var_num(id(fid), 'density')
-      if (var_id .lt. CDF_OK) stop 'variable density not found'
+      if (var_id .lt. CDF_OK) call shutdown('variable density not found')
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, values(lbounds(fid):ubounds(fid)), istat)
-      if (istat .lt. CDF_OK) stop 'reading density failed'
+      if (istat .lt. CDF_OK) call shutdown('reading density failed')
 
       var_id = cdf90_get_var_num(id(fid), 'longitude')
-      if (var_id .lt. CDF_OK) stop 'variable lon not found'
+      if (var_id .lt. CDF_OK) call shutdown('variable longitude not found')
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),1), istat)
-      if (istat .lt. CDF_OK) stop 'reading lon failed'
+      if (istat .lt. CDF_OK) call shutdown('reading lon failed')
 
       var_id = cdf90_get_var_num(id(fid), 'latitude')
-      if (var_id .lt. CDF_OK) stop 'variable lat not found'
+      if (var_id .lt. CDF_OK) call shutdown('variable latitude not found')
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),2), istat)
-      if (istat .lt. CDF_OK) stop 'reading lat failed'
+      if (istat .lt. CDF_OK) call shutdown('reading latitude failed')
 
       var_id = cdf90_get_var_num(id(fid), 'altitude')
-      if (var_id .lt. CDF_OK) stop 'variable alt not found'
+      if (var_id .lt. CDF_OK) call shutdown('variable altitude not found')
       call cdf90_get_zvar_allrecords_varid(id(fid), var_id, position(lbounds(fid):ubounds(fid),3), istat)
-      if (istat .lt. CDF_OK) stop 'reading alt failed'
+      if (istat .lt. CDF_OK) call shutdown('reading altitude failed')
 
       var_id = cdf90_get_var_num(id(fid), 'validity_flag')
-      if (var_id .lt. CDF_OK) stop 'variable validity_flag not found'
-      call cdf90_get_zvar_allrecords_varid_int1(id(fid), var_id, flag(lbounds(fid):ubounds(fid)), istat)
-      if (istat .lt. CDF_OK) stop 'reading validity_flag failed'
+      if (var_id .ge. CDF_OK) then
+        call cdf90_get_zvar_allrecords_varid_int1(id(fid), var_id, flag(lbounds(fid):ubounds(fid)), istat)
+        if (istat .lt. CDF_OK) call shutdown('reading validity_flag failed')
+      else if(var_id .eq. NO_SUCH_VAR) then
+        write(*,*) 'CDF file does not contain a validity_flag'
+        flag(lbounds(fid):ubounds(fid)) = 0
+      else
+        call shutdown('checking validity_flag failed')
+      end if
 
       call cdf90_close(id(fid), istat)
-      if (istat .lt. CDF_OK) stop 'close failed'
+      if (istat .lt. CDF_OK) call shutdown( 'close failed')
 
     end do
 
     deallocate(time_all)
 
     ! data gaps: anomalous data (flag 1) or fill values (FILLVAL 0.999E33)
-    allocate(this%data_gap(n_all))
-    this%data_gap = (flag /= 0 .or. &
+    allocate(data_gap(n_all))
+    data_gap = (flag /= 0 .or. &
                      values > 1e32 .or. &
                      any(position > 1e32, dim=2))
     deallocate(flag)
 
     ! duplicate or non-increasing time stamps (e.g. overlapping files)
     do i = 2, n_all
-      if (this%modeltime(i) <= this%modeltime(i-1)) this%data_gap(i) = .true.
+      if (modeltime(i) <= modeltime(i-1)) data_gap(i) = .true.
     end do
 
     ! convert to cartesian coordinates to avoid jumps in longitude interpolation
     do i=1,n_all
-      if(this%data_gap(i).eqv..false.)then
+      if(data_gap(i).eqv..false.)then
         position(i,:) = grs80%ellipsoidalGeodetic2cartesian(position(i,:))
       end if
     end do
 
-    ! initalize spline interpolation
-    call this%x_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,1),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%y_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,2),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%z_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,3),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%values%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(values,this%data_gap.eqv..false.),&
-                          degree=3)
+    call this%init(n_all, modeltime, position, values, data_gap)
 
+    deallocate(data_gap)
+    deallocate(modeltime)
     deallocate(values)
     deallocate(position)
-
-    ! extend gap to neigbour on left and right twice
-    ! so bspline of degree is always in valid range
-    call binary_dilation(this%data_gap,2)
-
     deallocate(id,counts,lbounds,ubounds)
 
   end subroutine
@@ -667,6 +703,8 @@ module trajectory_data_module
 
     real, allocatable, dimension(:) :: values
     real, allocatable, dimension(:,:) :: position
+    real, allocatable, dimension(:) :: modeltime
+    logical, allocatable, dimension(:) :: data_gap
 
     integer, dimension(:), allocatable :: counts
     integer, dimension(:), allocatable :: lbounds
@@ -721,13 +759,13 @@ module trajectory_data_module
     end do
 
     call convert_GPS_to_UTC(time_all)
-    allocate(this%modeltime(n_all))
-    call convert_to_seconds_since_ref(time_all,this%modeltime)
+    allocate(modeltime(n_all))
+    call convert_to_seconds_since_ref(time_all,modeltime)
 
     ! read data gaps
-    allocate(this%data_gap(n_all))
+    allocate(data_gap(n_all))
     do fid = 1, nfiles
-      call denswind_get_data_gap(ncid(fid), this%data_gap(lbounds(fid):ubounds(fid)))
+      call denswind_get_data_gap(ncid(fid), data_gap(lbounds(fid):ubounds(fid)))
     end do
 
     ! read trajectory
@@ -756,11 +794,11 @@ module trajectory_data_module
       if (istat /= NF90_NOERR) call handle_ncerr(istat,'trajectory_data_read_denswind')
     end do
 
-    this%data_gap = (this%data_gap .or. &
-                     isnan(values) .or. &
-                     isnan(position(:,1)) .or. &
-                     isnan(position(:,2)) .or. &
-                     isnan(position(:,3)))
+    data_gap = (data_gap .or. &
+                isnan(values) .or. &
+                isnan(position(:,1)) .or. &
+                isnan(position(:,2)) .or. &
+                isnan(position(:,3)))
 
 !     do i=1,n_all
 !       if(this%data_gap(i).eqv..false.)then
@@ -773,32 +811,17 @@ module trajectory_data_module
 
     ! convert to cartesian coordinates to avoid jumps in longitude interpolation
     do i=1,n_all
-      if(this%data_gap(i).eqv..false.)then
+      if(data_gap(i).eqv..false.)then
         position(i,:) = wgs84%ellipsoidalGeodetic2cartesian(position(i,:))
       end if
     end do
 
-    ! initalize spline interpolation
-    call this%x_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,1),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%y_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,2),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%z_trf%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(position(:,3),this%data_gap.eqv..false.),&
-                          degree=3)
-    call this%values%init( pack(this%modeltime,this%data_gap.eqv..false.),&
-                          pack(values,this%data_gap.eqv..false.),&
-                          degree=3)
+    call this%init( n_all, modeltime, position, values, data_gap)
 
+    deallocate(modeltime)
+    deallocate(data_gap)
     deallocate(values)
     deallocate(position)
-
-    ! extend gap to neigbour on left and right twice
-    ! so bspline of degree is always in valid range
-    call binary_dilation(this%data_gap,2)
-
     deallocate(ncid,counts,lbounds,ubounds)
 
   end subroutine

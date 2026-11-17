@@ -400,6 +400,30 @@ module time_module
 
   end subroutine
 
+  !> converts TIE-GCM intern time to string
+  function modeltime_to_string(modeltime) result(time_string)
+
+    use ESMF
+
+    implicit none
+
+    ! arguments
+    real, intent(in) :: modeltime ! seconds sind model reference epoch
+
+    ! local
+    type(ESMF_TimeInterval) :: timeinterval
+    type(ESMF_Time) :: ref_time
+    integer :: rc
+
+    ! result
+    character(len=27) :: time_string
+
+    call ESMF_TimeIntervalSet(timeinterval, s_r8=modeltime, rc=rc)
+    call model_reference_epoch(ref_time)
+    call ESMF_TimeGet(ref_time + timeinterval, timeString=time_string, rc=rc)
+
+  end function
+
   !> Converts an ESMF_TimeInterval to an equivalent number of TIE-GCM time
   !! steps.
   function timeinterval_to_tgcm_steps( interval ) result(steps)
