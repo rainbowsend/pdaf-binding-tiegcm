@@ -350,6 +350,9 @@ module configuration
       end do
       observation%tum_ne%write_every_sec= output%write_every_sec
       observation%tum_ne%force_write_on_update= output%force_write_on_update
+
+      observation%tum_vtec%write_every_sec= output%write_every_sec
+      observation%tum_vtec%force_write_on_update= output%force_write_on_update
     else
       do i=1,max_cal_den_tme_file
         if(observation%cal_den(i)%write_every_sec==-1 ) observation%cal_den(i)%write_every_sec= output%write_every_sec
@@ -358,6 +361,7 @@ module configuration
         if(observation%satellite(i)%write_every_sec==-1 ) observation%satellite(i)%write_every_sec= output%write_every_sec
       end do
       if(observation%tum_ne%write_every_sec==-1 ) observation%tum_ne%write_every_sec= output%write_every_sec
+      if(observation%tum_vtec%write_every_sec==-1 ) observation%tum_vtec%write_every_sec= output%write_every_sec
     end if
 
     ! perform some consitency checks 
